@@ -2,18 +2,41 @@ import React, { useState } from "react";
 import { Booking } from "../types";
 import { 
   Briefcase, History, CreditCard, Heart, Bell, Wallet, 
-  Settings, UserCheck, Moon, Sun, ShieldAlert, FileText, Compass, Trash2, Calendar
+  Settings, UserCheck, Moon, Sun, ShieldAlert, FileText, Compass, Trash2, Calendar,
+  LogIn, LogOut, Loader2, CloudLightning, ShieldCheck, UserPlus
 } from "lucide-react";
+import { User, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "firebase/auth";
+import { auth, UserProfile, saveUserProfile, signInWithGoogle } from "../lib/firebase";
 
 interface UserDashboardProps {
   bookings: Booking[];
   onCancelBooking?: (id: string) => void;
   isDarkMode: boolean;
   onToggleDarkMode: () => void;
+  currentUser: User | null;
+  userProfile: UserProfile | null;
+  loadingBookings: boolean;
 }
 
-export default function UserDashboard({ bookings, onCancelBooking, isDarkMode, onToggleDarkMode }: UserDashboardProps) {
+export default function UserDashboard({ 
+  bookings, 
+  onCancelBooking, 
+  isDarkMode, 
+  onToggleDarkMode,
+  currentUser,
+  userProfile,
+  loadingBookings
+}: UserDashboardProps) {
   const [activeTab, setActiveTab] = useState<"upcoming" | "past" | "travelers" | "wallet" | "settings">("upcoming");
+
+  // Auth local states
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   // Mock static traveler profiles
   const [travelers, setTravelers] = useState([
@@ -46,17 +69,112 @@ export default function UserDashboard({ bookings, onCancelBooking, isDarkMode, o
     setTravelers((prev) => prev.filter(t => t.name !== name));
   };
 
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      if (authMode === "login") {
+        await signInWithEmailAndPassword(auth, authEmail, authPassword);
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+        const user = userCredential.user;
+        const newProfile: UserProfile = {
+          name: authName || authEmail.split("@")[0],
+          email: authEmail,
+          frequentFlyer: "SQ-" + Math.floor(1000000 + Math.random() * 9000000),
+          tier: "Platinum",
+          balance: 2500
+        };
+        await saveUserProfile(user.uid, newProfile);
+      }
+      setShowAuthModal(false);
+      setAuthEmail("");
+      setAuthPassword("");
+      setAuthName("");
+    } catch (err: any) {
+      console.error(err);
+      let msg = "Authentication failed. Please verify credentials.";
+      if (err.code === "auth/email-already-in-use") {
+        msg = "Email is already registered. Please login instead.";
+      } else if (err.code === "auth/invalid-credential") {
+        msg = "Incorrect password or email.";
+      } else if (err.code === "auth/weak-password") {
+        msg = "Password must be at least 6 characters long.";
+      }
+      setAuthError(msg);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      await signInWithGoogle();
+      setShowAuthModal(false);
+    } catch (err: any) {
+      console.error(err);
+      setAuthError("Google Sign-In failed or was cancelled. Please try again.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (confirm("Are you sure you want to log out of SkyElite cloud services? Your active bookings will remain saved on this device.")) {
+      try {
+        await signOut(auth);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const getUserInitials = () => {
+    if (currentUser && userProfile?.name) {
+      return userProfile.name.split(" ").slice(0, 2).map(n => n[0]).join("").toUpperCase();
+    }
+    return "GT";
+  };
+
   return (
     <div className="w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8 animate-in fade-in slide-in-from-bottom-8 duration-300">
       
       {/* Sidebar Navigation */}
       <div className="md:col-span-1 bg-white border border-gray-100 rounded-3xl p-5 shadow-lg space-y-6 h-fit">
-        <div className="border-b border-gray-100 pb-4 text-center">
+        <div className="border-b border-gray-100 pb-4 text-center relative">
           <div className="w-16 h-16 rounded-full bg-[#081C3A] text-white flex items-center justify-center font-bold text-xl mx-auto shadow-md">
-            AP
+            {getUserInitials()}
           </div>
-          <h2 className="font-extrabold text-gray-800 mt-3 text-base">Arun Prasad</h2>
-          <span className="text-[10px] font-bold text-yellow-500 uppercase tracking-widest block mt-0.5">⭐ SkyElite Gold Member</span>
+          <h2 className="font-extrabold text-gray-800 mt-3 text-base truncate px-2">
+            {currentUser ? (userProfile?.name || currentUser.email?.split("@")[0]) : "Guest Traveler"}
+          </h2>
+          <span className="text-[10px] font-bold text-yellow-500 uppercase tracking-widest block mt-0.5">
+            {currentUser ? `⭐ SkyElite ${userProfile?.tier || "Gold"} Member` : "☁️ Local Offline Session"}
+          </span>
+          {currentUser ? (
+            <button
+              onClick={handleLogout}
+              className="mt-3 inline-flex items-center space-x-1 px-3 py-1 bg-gray-50 hover:bg-rose-50 text-gray-500 hover:text-rose-600 rounded-lg text-[10px] font-bold transition-all border border-gray-100"
+            >
+              <LogOut className="w-3 h-3" />
+              <span>Log Out</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                setAuthError("");
+                setAuthMode("login");
+                setShowAuthModal(true);
+              }}
+              className="mt-3 inline-flex items-center space-x-1 px-3 py-1 bg-[#081C3A] hover:bg-opacity-90 text-white rounded-lg text-[10px] font-bold transition-all shadow-xs"
+            >
+              <LogIn className="w-3 h-3" />
+              <span>Sign In / Sync</span>
+            </button>
+          )}
         </div>
 
         {/* Navigation buttons list */}
@@ -97,7 +215,9 @@ export default function UserDashboard({ bookings, onCancelBooking, isDarkMode, o
           </div>
           <div className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-xs text-amber-800 text-center">
             <span className="block text-[10px] font-bold uppercase text-amber-500 tracking-wider">Travel Credits</span>
-            <span className="text-lg font-black block mt-1">$2,500.00</span>
+            <span className="text-lg font-black block mt-1 font-mono">
+              ${currentUser && userProfile ? userProfile.balance.toLocaleString() : "2,500.00"}
+            </span>
           </div>
         </div>
       </div>
@@ -117,6 +237,37 @@ export default function UserDashboard({ bookings, onCancelBooking, isDarkMode, o
                 {bookings.length} Flight{bookings.length === 1 ? "" : "s"} booked
               </span>
             </div>
+
+            {!currentUser && (
+              <div className="bg-amber-50/70 border border-amber-100 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-start space-x-3 text-xs">
+                  <CloudLightning className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="font-bold text-gray-800">Durable Cloud Backups Offline</h4>
+                    <p className="text-gray-500 mt-0.5">Your bookings are currently saved on this local browser session. Sign in to enable Firebase database synchronization across all your devices.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setAuthError("");
+                    setAuthMode("login");
+                    setShowAuthModal(true);
+                  }}
+                  className="px-4 py-2 bg-[#202A36] text-white rounded-xl text-xs font-bold hover:bg-opacity-95 shrink-0"
+                >
+                  Sync to Cloud
+                </button>
+              </div>
+            )}
+            {currentUser && (
+              <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-4 flex items-center space-x-3 text-xs text-emerald-800">
+                <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+                <div>
+                  <h4 className="font-bold text-emerald-900">Active Firebase Sync Online</h4>
+                  <p className="text-emerald-700 mt-0.5">Your bookings are safely backed up to Google Firebase Firestore under your profile ({currentUser.email}).</p>
+                </div>
+              </div>
+            )}
 
             {bookings.length === 0 ? (
               <div className="py-16 text-center space-y-4 flex flex-col items-center justify-center">
@@ -424,6 +575,164 @@ export default function UserDashboard({ bookings, onCancelBooking, isDarkMode, o
         )}
 
       </div>
+
+      {/* Premium Firebase Auth Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 md:p-8 shadow-2xl relative border border-gray-100 animate-in fade-in zoom-in-95 duration-200 text-gray-800">
+            <button
+              onClick={() => setShowAuthModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 font-bold text-lg p-2"
+            >
+              ✕
+            </button>
+            
+            <div className="text-center mb-6">
+              <div className="w-12 h-12 bg-[#081C3A] text-white flex items-center justify-center rounded-2xl font-bold text-lg mx-auto mb-3 shadow-md">
+                SE
+              </div>
+              <h3 className="text-xl font-black text-gray-900">SkyElite Premium Club</h3>
+              <p className="text-xs text-gray-400 mt-1">
+                {authMode === "login" 
+                  ? "Access your luxury travel account and sync bookings to Firebase." 
+                  : "Create your elite loyalty account to unlock durable cloud backups."}
+              </p>
+            </div>
+
+            {authError && (
+              <div className="mb-4 p-4 bg-rose-50 border border-rose-100 text-rose-800 rounded-xl text-xs space-y-2">
+                <p className="font-bold text-center text-rose-900">
+                  {authError.includes("auth/operation-not-allowed") || authError.includes("operation-not-allowed")
+                    ? "Email/Password sign-in is not enabled yet!"
+                    : authError}
+                </p>
+                {(authError.includes("auth/operation-not-allowed") || authError.includes("operation-not-allowed")) && (
+                  <div className="bg-white rounded-lg p-2.5 text-[11px] text-gray-700 leading-relaxed border border-rose-200">
+                    <span className="font-bold text-gray-900 block mb-1">To enable Email/Password login:</span>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Go to the <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline font-semibold">Firebase Console</a></li>
+                      <li>Navigate to <strong>Build &gt; Authentication &gt; Sign-in method</strong></li>
+                      <li>Click <strong>Add new provider</strong>, select <strong>Email/Password</strong>, and enable it</li>
+                    </ol>
+                    <span className="block mt-2 font-bold text-emerald-700">💡 Tip: You can Sign In with Google instantly below without any setup!</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              {authMode === "register" && (
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="Enter full name"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-xs font-semibold focus:outline-none focus:border-[#081C3A]"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-xs font-semibold focus:outline-none focus:border-[#081C3A]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Password</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Min 6 characters"
+                  className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-xs font-semibold focus:outline-none focus:border-[#081C3A]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full py-3 bg-[#081C3A] hover:bg-opacity-95 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md disabled:opacity-50"
+              >
+                {authLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <span>{authMode === "login" ? "Sign In to Account" : "Register Credentials"}</span>
+                )}
+              </button>
+            </form>
+
+            <div className="relative my-5">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-100"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-3 text-gray-400 font-bold tracking-wider text-[10px]">Or</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={authLoading}
+              className="w-full py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2.5 shadow-xs disabled:opacity-50"
+            >
+              {authLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>Sign In with Google</span>
+                </>
+              )}
+            </button>
+
+            <div className="mt-6 pt-4 border-t border-gray-100 text-center text-xs">
+              <span className="text-gray-400">
+                {authMode === "login" ? "New to SkyElite?" : "Already registered?"}{" "}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode(authMode === "login" ? "register" : "login");
+                  setAuthError("");
+                }}
+                className="text-[#081C3A] font-extrabold hover:underline focus:outline-none"
+              >
+                {authMode === "login" ? "Create an account" : "Sign in here"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

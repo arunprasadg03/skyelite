@@ -1,0 +1,32 @@
+{
+  "collections": {
+    "users": {
+      "schema": {
+        "name": "string",
+        "email": "string",
+        "frequentFlyer": "string",
+        "tier": "string",
+        "balance": "number"
+      },
+      "subcollections": {
+        "bookings": {
+          "schema": {
+            "id": "string",
+            "bookingId": "string",
+            "flight": "object",
+            "selectedSeats": "array",
+            "passengers": "array",
+            "contactInfo": "object",
+            "paymentMethod": "string",
+            "paymentStatus": "string",
+            "totalAmount": "number",
+            "dateBooked": "string",
+            "qrCodeUrl": "string",
+            "userId": "string",
+            "createdAt": "string"
+          }
+        }
+      }
+    }
+  }
+}

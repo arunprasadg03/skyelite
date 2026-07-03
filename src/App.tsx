@@ -18,6 +18,16 @@ import BookingConfirmation from "./components/BookingConfirmation";
 import UserDashboard from "./components/UserDashboard";
 
 import { Flight, FlightSearchQuery, Passenger, ContactInfo, Booking } from "./types";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { 
+  auth, 
+  saveBookingToCloud, 
+  fetchBookingsFromCloud, 
+  deleteBookingFromCloud, 
+  getUserProfile, 
+  saveUserProfile, 
+  UserProfile 
+} from "./lib/firebase";
 
 export default function App() {
   const [currentView, setCurrentView] = useState<"home" | "booking" | "dashboard" | "confirmation">("home");
@@ -105,7 +115,79 @@ export default function App() {
     ];
   });
 
-  // Save bookings to local storage on changes
+  // Auth and Profile sync state
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+
+  // Monitor Firebase Auth changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        setLoadingBookings(true);
+        try {
+          // Load bookings from Cloud
+          const cloudBookings = await fetchBookingsFromCloud(user.uid);
+          
+          // Load User Profile from Cloud
+          const profile = await getUserProfile(user.uid);
+          if (profile) {
+            setUserProfile(profile);
+          } else {
+            // Create a default profile
+            const defaultProfile: UserProfile = {
+              name: user.displayName || user.email?.split("@")[0] || "SkyElite Member",
+              email: user.email || "",
+              frequentFlyer: "SQ-" + Math.floor(1000000 + Math.random() * 9000000),
+              tier: "Gold",
+              balance: 2500
+            };
+            await saveUserProfile(user.uid, defaultProfile);
+            setUserProfile(defaultProfile);
+          }
+
+          // Merge local storage bookings with cloud if any, or sync
+          if (cloudBookings.length > 0) {
+            setBookings(cloudBookings);
+          } else {
+            // If cloud has zero bookings, push any local bookings to cloud
+            const localSaved = localStorage.getItem("skyelite_bookings");
+            if (localSaved) {
+              try {
+                const parsed: Booking[] = JSON.parse(localSaved);
+                for (const b of parsed) {
+                  await saveBookingToCloud(user.uid, b);
+                }
+                if (parsed.length > 0) {
+                  setBookings(parsed);
+                }
+              } catch (e) {
+                console.error(e);
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Failed to sync with Firebase: ", err);
+        }
+        setLoadingBookings(false);
+      } else {
+        setUserProfile(null);
+        // Load from local storage
+        const saved = localStorage.getItem("skyelite_bookings");
+        if (saved) {
+          try {
+            setBookings(JSON.parse(saved));
+          } catch (e) {
+            setBookings([]);
+          }
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Save bookings to local storage on changes (also cloud if logged in)
   useEffect(() => {
     localStorage.setItem("skyelite_bookings", JSON.stringify(bookings));
   }, [bookings]);
@@ -206,6 +288,14 @@ export default function App() {
     };
 
     setBookings((prev) => [newBooking, ...prev]);
+
+    // Save to Firebase Firestore if logged in
+    if (currentUser) {
+      saveBookingToCloud(currentUser.uid, newBooking).catch((err) => {
+        console.error("Failed to save booking to Firestore: ", err);
+      });
+    }
+
     setCurrentView("confirmation");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -213,6 +303,13 @@ export default function App() {
   // Cancel reservation
   const handleCancelBooking = (bookingId: string) => {
     setBookings((prev) => prev.filter((b) => b.id !== bookingId));
+    
+    // Delete from Firebase Firestore if logged in
+    if (currentUser) {
+      deleteBookingFromCloud(currentUser.uid, bookingId).catch((err) => {
+        console.error("Failed to delete booking from Firestore: ", err);
+      });
+    }
   };
 
   // Main Return to Dashboard
@@ -390,6 +487,9 @@ export default function App() {
               onCancelBooking={handleCancelBooking}
               isDarkMode={isDarkMode}
               onToggleDarkMode={handleToggleDarkMode}
+              currentUser={currentUser}
+              userProfile={userProfile}
+              loadingBookings={loadingBookings}
             />
           </div>
         )}
